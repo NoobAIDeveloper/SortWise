@@ -9,9 +9,9 @@ let win; // Keep a reference to the window object
 function createWindow() {
   win = new BrowserWindow({
     width: 820,
-    height: 760,
+    height: 820,
     minWidth: 680,
-    minHeight: 620,
+    minHeight: 780,
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
