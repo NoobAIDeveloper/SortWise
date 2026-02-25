@@ -77,6 +77,16 @@ No. The only network request SortWise makes is to OpenStreetMap's geocoding API 
 
 ---
 
+## Release notes
+
+**v1.0.1**
+Fixed a bug where files moved into destination subfolders during a sort could be picked up again and sorted a second time into deeper nested directories. Progress could also show values above 100% in affected runs. All files are now collected before sorting starts, so nothing gets processed twice.
+
+**v1.0.0**
+Initial release.
+
+---
+
 ## Built with
 
 - [Electron](https://www.electronjs.org/) + [React](https://reactjs.org/) - desktop app and UI
