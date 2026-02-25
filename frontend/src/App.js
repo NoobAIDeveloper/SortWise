@@ -1,6 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
+function Toggle({ name, checked, onChange }) {
+  return (
+    <label className="toggle">
+      <input type="checkbox" name={name} checked={checked} onChange={onChange} />
+      <span className="toggle-slider" />
+    </label>
+  );
+}
+
 function App() {
   const [folders, setFolders] = useState([]);
   const [sortOptions, setSortOptions] = useState({
@@ -17,215 +26,218 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [logFile, setLogFile] = useState(null);
   const [dateSortOption, setDateSortOption] = useState('yearMonth');
+  const [isSorting, setIsSorting] = useState(false);
+  const [status, setStatus] = useState(null); // { message, type: 'success' | 'error' }
 
   useEffect(() => {
-    window.electronAPI.onSortProgress((event, progress) => {
-      setProgress(progress);
+    window.electronAPI.onSortProgress((event, value) => {
+      setProgress(value);
     });
   }, []);
 
-  const handleSelectFolders = async () => {
+  const handleAddFolders = async () => {
     const result = await window.electronAPI.selectFolders();
     if (result) {
-      setFolders(result);
+      setFolders(prev => [...new Set([...prev, ...result])]);
     }
   };
 
-  const handleUndoSort = async () => {
-    if (!logFile) {
-      alert('No sort operation to undo.');
-      return;
-    }
-
-    const result = await window.electronAPI.undoSort(logFile);
-    alert(result.message);
-    setLogFile(null);
-  };
-
-  const handleSort = async () => {
-    if (folders.length === 0) {
-      alert('Please select one or more folders to sort.');
-      return;
-    }
-
-    const options = {
-      folders: folders,
-      sortOptions: sortOptions,
-      dateSortOption: dateSortOption,
-      fileOperation: fileOperation,
-      conflictResolution: conflictResolution,
-    };
-
-    const result = await window.electronAPI.sortFiles(options);
-    setLogFile(result.logFile);
-    alert(result.message);
-    setProgress(0);
+  const handleRemoveFolder = (index) => {
+    setFolders(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleCheckboxChange = (event) => {
     const { name, checked } = event.target;
-    setSortOptions({
-      ...sortOptions,
-      [name]: checked,
-    });
+    setSortOptions(prev => ({ ...prev, [name]: checked }));
   };
 
+  const handleSort = async () => {
+    if (folders.length === 0) {
+      setStatus({ message: 'Please add at least one folder to sort.', type: 'error' });
+      return;
+    }
+    if (!Object.values(sortOptions).some(Boolean)) {
+      setStatus({ message: 'Please enable at least one sorting option.', type: 'error' });
+      return;
+    }
+
+    setIsSorting(true);
+    setStatus(null);
+    setProgress(0);
+
+    try {
+      const result = await window.electronAPI.sortFiles({
+        folders,
+        sortOptions,
+        dateSortOption,
+        fileOperation,
+        conflictResolution,
+      });
+      setLogFile(result.logFile);
+      setStatus({ message: result.message, type: 'success' });
+    } catch (e) {
+      setStatus({ message: e.message || 'An error occurred while sorting.', type: 'error' });
+    } finally {
+      setIsSorting(false);
+      setProgress(0);
+    }
+  };
+
+  const handleUndoSort = async () => {
+    if (!logFile) return;
+    try {
+      const result = await window.electronAPI.undoSort(logFile);
+      setLogFile(null);
+      setStatus({ message: result.message, type: result.status === 'success' ? 'success' : 'error' });
+    } catch (e) {
+      setStatus({ message: e.message || 'Undo failed.', type: 'error' });
+    }
+  };
+
+  const sortRows = [
+    { name: 'exifDate',      label: 'EXIF Date' },
+    { name: 'cameraModel',   label: 'Camera Model' },
+    { name: 'fileType',      label: 'File Type' },
+    { name: 'location',      label: 'Location' },
+    { name: 'orientation',   label: 'Orientation' },
+    { name: 'livePhotos',    label: 'Live Photos' },
+    { name: 'deduplication', label: 'Deduplication' },
+  ];
+
   return (
-    <div className="App">
-      <h1 className="title">SortWise</h1>
-      <button className="select-button" onClick={handleSelectFolders}>Select Folders</button>
-
-      <div className="options-container">
-        <p>Selected Folders: {folders.join(', ')}</p>
-
-        <div>
-          <h3>Sorting Options</h3>
-          <label>
-            <input
-              type="checkbox"
-              name="exifDate"
-              checked={sortOptions.exifDate}
-              onChange={handleCheckboxChange}
-            />
-            EXIF Date
-          </label>
-          {sortOptions.exifDate && (
-            <div style={{ marginLeft: '20px' }}>
-              <label>
-                <input
-                  type="radio"
-                  name="dateSortOption"
-                  value="yearMonth"
-                  checked={dateSortOption === 'yearMonth'}
-                  onChange={(e) => setDateSortOption(e.target.value)}
-                />
-                Year and Month
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="dateSortOption"
-                  value="year"
-                  checked={dateSortOption === 'year'}
-                  onChange={(e) => setDateSortOption(e.target.value)}
-                />
-                Year Only
-              </label>
-            </div>
-          )}
-          <label>
-            <input
-              type="checkbox"
-              name="cameraModel"
-              checked={sortOptions.cameraModel}
-              onChange={handleCheckboxChange}
-            />
-            Camera Model
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              name="fileType"
-              checked={sortOptions.fileType}
-              onChange={handleCheckboxChange}
-            />
-            File Type
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              name="location"
-              checked={sortOptions.location}
-              onChange={handleCheckboxChange}
-            />
-            Location
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              name="orientation"
-              checked={sortOptions.orientation}
-              onChange={handleCheckboxChange}
-            />
-            Orientation
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              name="livePhotos"
-              checked={sortOptions.livePhotos}
-              onChange={handleCheckboxChange}
-            />
-            Live Photos
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              name="deduplication"
-              checked={sortOptions.deduplication}
-              onChange={handleCheckboxChange}
-            />
-            Deduplication
-          </label>
-        </div>
-
-        <div>
-          <h3>File Handling</h3>
-          <label>
-            <input
-              type="radio"
-              name="fileOperation"
-              value="move"
-              checked={fileOperation === 'move'}
-              onChange={(e) => setFileOperation(e.target.value)}
-            />
-            Move Files
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="fileOperation"
-              value="copy"
-              checked={fileOperation === 'copy'}
-              onChange={(e) => setFileOperation(e.target.value)}
-            />
-            Copy Files
-          </label>
-        </div>
-
-        <div>
-          <h3>Conflict Resolution</h3>
-          <label>
-            <input
-              type="radio"
-              name="conflictResolution"
-              value="rename"
-              checked={conflictResolution === 'rename'}
-              onChange={(e) => setConflictResolution(e.target.value)}
-            />
-            Rename Duplicates
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="conflictResolution"
-              value="overwrite"
-              checked={conflictResolution === 'overwrite'}
-              onChange={(e) => setConflictResolution(e.target.value)}
-            />
-            Overwrite Existing Files
-          </label>
-        </div>
+    <div className="app">
+      {/* Title bar — draggable, traffic lights inset here by macOS */}
+      <div className="titlebar">
+        <span className="app-title">SortWise</span>
       </div>
 
-      {progress > 0 && (
-        <div className="progress-container">
-          <progress className="progress-bar" value={progress} max="100" />
-          <div className="progress-text">{`${progress}%`}</div>
-        </div>
-      )}
-      <button className="sort-button" onClick={handleSort}>Sort Files</button>
-      <button className="undo-button" onClick={handleUndoSort} disabled={!logFile}>Undo Sort</button>
+      <div className="main-layout">
+        {/* Sidebar — folder management */}
+        <aside className="sidebar">
+          <div className="sidebar-section-label">Source Folders</div>
+          <button className="add-folder-btn" onClick={handleAddFolders}>
+            <span>+</span> Add Folder
+          </button>
+
+          <div className="folder-list">
+            {folders.length === 0 && (
+              <p className="empty-hint">No folders selected.</p>
+            )}
+            {folders.map((folder, i) => {
+              const parts = folder.split('/');
+              const display = parts[parts.length - 1] || folder;
+              return (
+                <div key={folder} className="folder-item">
+                  <span className="folder-icon">📁</span>
+                  <span className="folder-path" title={folder}>{display}</span>
+                  <button
+                    className="remove-folder"
+                    onClick={() => handleRemoveFolder(i)}
+                    title="Remove folder"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* Main content */}
+        <main className="content">
+          <div className="section-label">Sorting Options</div>
+          <div className="card">
+            {sortRows.map(({ name, label }) => (
+              <div key={name} className="card-row">
+                <div className="row-left">
+                  <span className="row-label">{label}</span>
+                  {name === 'exifDate' && sortOptions.exifDate && (
+                    <select
+                      className="date-select"
+                      value={dateSortOption}
+                      onChange={e => setDateSortOption(e.target.value)}
+                    >
+                      <option value="yearMonth">Year &amp; Month</option>
+                      <option value="year">Year Only</option>
+                    </select>
+                  )}
+                </div>
+                <Toggle name={name} checked={sortOptions[name]} onChange={handleCheckboxChange} />
+              </div>
+            ))}
+          </div>
+
+          <div className="section-label">File Handling</div>
+          <div className="card">
+            <div className="card-row">
+              <span className="row-label">Operation</span>
+              <div className="radio-group">
+                {[['move', 'Move Files'], ['copy', 'Copy Files']].map(([val, lbl]) => (
+                  <label
+                    key={val}
+                    className={`radio-option${fileOperation === val ? ' selected' : ''}`}
+                  >
+                    <input
+                      type="radio"
+                      name="fileOperation"
+                      value={val}
+                      checked={fileOperation === val}
+                      onChange={e => setFileOperation(e.target.value)}
+                    />
+                    {lbl}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="card-row">
+              <span className="row-label">Conflicts</span>
+              <div className="radio-group">
+                {[['rename', 'Rename'], ['overwrite', 'Overwrite']].map(([val, lbl]) => (
+                  <label
+                    key={val}
+                    className={`radio-option${conflictResolution === val ? ' selected' : ''}`}
+                  >
+                    <input
+                      type="radio"
+                      name="conflictResolution"
+                      value={val}
+                      checked={conflictResolution === val}
+                      onChange={e => setConflictResolution(e.target.value)}
+                    />
+                    {lbl}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {isSorting && (
+            <div className="progress-section">
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${progress}%` }} />
+              </div>
+              <span className="progress-text">{progress}%</span>
+            </div>
+          )}
+
+          {status && (
+            <div className={`status-message ${status.type}`}>{status.message}</div>
+          )}
+
+          <div className="actions">
+            <button
+              className="btn-secondary"
+              onClick={handleUndoSort}
+              disabled={!logFile || isSorting}
+            >
+              ↩ Undo Last Sort
+            </button>
+            <button className="btn-primary" onClick={handleSort} disabled={isSorting}>
+              {isSorting ? 'Sorting…' : 'Sort Files ▶'}
+            </button>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
