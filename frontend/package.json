@@ -1,8 +1,9 @@
 {
   "name": "sortwise",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "main": "main.js",
+  "homepage": "./",
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -21,9 +22,32 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "electron-start": "electron .",
-    "preelectron-pack": "npm run build",
-    "electron-pack": "electron-builder",
+    "electron-pack": "npm run build && electron-builder",
     "dev": "concurrently \"npm start\" \"wait-on http://localhost:3000 && NODE_ENV=development npm run electron-start\""
+  },
+  "build": {
+    "appId": "com.noobaideveloper.sortwise",
+    "productName": "SortWise",
+    "files": [
+      "build/**/*",
+      "main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/main",
+        "to": "main"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        { "target": "dmg" }
+      ]
+    },
+    "dmg": {
+      "title": "Install SortWise"
+    }
   },
   "browserslist": {
     "production": [

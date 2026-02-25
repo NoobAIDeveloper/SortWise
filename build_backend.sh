@@ -1,20 +1,35 @@
 #!/bin/bash
+set -e
 
-# Activate virtual environment
-source /Users/bharat/PythonProjects/photo_organizer/venv/bin/activate
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Navigate to the backend directory
-cd backend
+echo "==> Activating virtual environment..."
+source "$SCRIPT_DIR/venv/bin/activate"
 
-# Install dependencies
-pip install -r requirements.txt
+echo "==> Installing backend dependencies..."
+pip install -r "$SCRIPT_DIR/backend/requirements.txt" -q
+pip install pyinstaller -q
 
-# Run pyinstaller
-pyinstaller --name sortwise_backend --onefile --windowed main.py
+echo "==> Building Python backend with PyInstaller..."
+cd "$SCRIPT_DIR/backend"
 
-# Move the executable to the dist folder
-mkdir -p ../dist
-mv dist/sortwise_backend ../dist/
+pyinstaller \
+  --name main \
+  --onefile \
+  --hidden-import=exifread \
+  --hidden-import=PIL \
+  --hidden-import=PIL.Image \
+  --hidden-import=geopy \
+  --hidden-import=geopy.geocoders \
+  --hidden-import=geopy.geocoders.nominatim \
+  main.py
 
-# Clean up
-rm -rf build dist spec
+echo "==> Copying binary to frontend/resources/..."
+mkdir -p "$SCRIPT_DIR/frontend/resources"
+cp dist/main "$SCRIPT_DIR/frontend/resources/main"
+chmod +x "$SCRIPT_DIR/frontend/resources/main"
+
+echo "==> Cleaning up PyInstaller build artifacts..."
+rm -rf build dist main.spec
+
+echo "==> Backend build complete → frontend/resources/main"

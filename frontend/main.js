@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = !app.isPackaged;
 
 let win; // Keep a reference to the window object
 
