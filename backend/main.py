@@ -1,4 +1,5 @@
 import csv
+import datetime
 import hashlib
 import os
 import sys
@@ -8,13 +9,17 @@ import exifread
 from PIL import Image
 from geopy.geocoders import Nominatim
 
+# Bug 5 fix: module-level geolocator with timeout (avoid recreating per call)
+geolocator = Nominatim(user_agent="sortwise/1.0", timeout=5)
+
+
 def get_exif_data(file_path):
     with open(file_path, 'rb') as f:
         tags = exifread.process_file(f, details=False)
     return tags
 
+
 def get_location(tags):
-    geolocator = Nominatim(user_agent="sortwise")
     lat_ref = tags.get('GPS GPSLatitudeRef')
     lat = tags.get('GPS GPSLatitude')
     lon_ref = tags.get('GPS GPSLongitudeRef')
@@ -35,8 +40,16 @@ def get_location(tags):
     latitude = to_decimal(lat, lat_ref)
     longitude = to_decimal(lon, lon_ref)
 
-    location = geolocator.reverse((latitude, longitude), exactly_one=True)
-    return location.raw['address']
+    # Bug 5 fix: wrapped in try-except so geocoding failures don't crash the sort
+    try:
+        location = geolocator.reverse((latitude, longitude), exactly_one=True)
+        if location:
+            return location.raw['address']
+    except Exception:
+        pass
+
+    return None
+
 
 def get_file_hash(file_path):
     hasher = hashlib.md5()
@@ -45,18 +58,22 @@ def get_file_hash(file_path):
         hasher.update(buf)
     return hasher.hexdigest()
 
+
 def sort_files(options):
     folders = options.get('folders', [])
     sort_options = options.get('sortOptions', {})
     file_operation = options.get('fileOperation', 'move')
     conflict_resolution = options.get('conflictResolution', 'rename')
+    # Bug 1 fix: read dateSortOption from options (was undefined variable)
+    date_sort_option = options.get('dateSortOption', 'yearMonth')
     hashes = set()
     log_file = os.path.join(os.path.expanduser("~"), "sortwise_log.csv")
     supported_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.mov', '.mp4', '.avi']
 
     with open(log_file, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Original Filename', 'Source Path', 'Destination Folder', 'Status'])
+        # Bug 3 fix: added 'Destination Filename' column to track actual name after rename
+        writer.writerow(['Original Filename', 'Source Path', 'Destination Folder', 'Status', 'Destination Filename'])
 
         all_files = []
         for folder in folders:
@@ -70,7 +87,7 @@ def sort_files(options):
             for root, _, files in os.walk(folder):
                 for filename in files:
                     file_path = os.path.join(root, filename)
-                    
+
                     processed_files += 1
                     progress = int((processed_files / total_files) * 100)
                     print(json.dumps({"type": "progress", "value": progress}))
@@ -78,29 +95,30 @@ def sort_files(options):
 
                     _, ext = os.path.splitext(filename)
                     if ext.lower() not in supported_extensions:
-                        writer.writerow([filename, file_path, '', f'Skipped (Unsupported File Type: {ext})'])
+                        writer.writerow([filename, file_path, '', f'Skipped (Unsupported File Type: {ext})', ''])
                         continue
 
                     try:
                         if sort_options.get('deduplication'):
                             file_hash = get_file_hash(file_path)
                             if file_hash in hashes:
-                                writer.writerow([filename, file_path, '', 'Skipped (Duplicate)'])
+                                writer.writerow([filename, file_path, '', 'Skipped (Duplicate)', ''])
                                 continue
                             hashes.add(file_hash)
 
                         target_subfolder = ''
 
                         if sort_options.get('fileType'):
-                            file_type = filename.split('.')[-1].lower()
+                            file_type = ext.lstrip('.').lower()
                             if 'screenshot' in filename.lower():
                                 target_subfolder = os.path.join(target_subfolder, 'Screenshots')
-                            elif file_type in ['jpg', 'jpeg', 'png', 'gif']:
+                            # Bug 2 fix: GIF checked before Photos so it isn't swallowed by the Photos branch
+                            elif file_type == 'gif':
+                                target_subfolder = os.path.join(target_subfolder, 'GIFs')
+                            elif file_type in ['jpg', 'jpeg', 'png']:
                                 target_subfolder = os.path.join(target_subfolder, 'Photos')
                             elif file_type in ['mov', 'mp4', 'avi']:
                                 target_subfolder = os.path.join(target_subfolder, 'Videos')
-                            elif file_type == 'gif':
-                                target_subfolder = os.path.join(target_subfolder, 'GIFs')
 
                         tags = get_exif_data(file_path)
 
@@ -108,22 +126,22 @@ def sort_files(options):
                             date_str = None
                             if 'EXIF DateTimeOriginal' in tags:
                                 date_str = str(tags['EXIF DateTimeOriginal'])
-                            
+
                             if date_str and len(date_str) >= 7:
                                 year = date_str[0:4]
                                 month = date_str[5:7]
                                 if year.isdigit() and month.isdigit():
+                                    # Bug 1 fix: date_sort_option now correctly comes from options
                                     if date_sort_option == 'yearMonth':
                                         target_subfolder = os.path.join(target_subfolder, year, month)
                                     else:
                                         target_subfolder = os.path.join(target_subfolder, year)
                             else:
                                 # Fallback to file system date
-                                import datetime
                                 file_date = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
                                 year = str(file_date.year)
-                                if options.get('dateSortOption') == 'yearMonth':
-                                    month = str(file_date.month).zfill(2)
+                                month = str(file_date.month).zfill(2)
+                                if date_sort_option == 'yearMonth':
                                     target_subfolder = os.path.join(target_subfolder, year, month)
                                 else:
                                     target_subfolder = os.path.join(target_subfolder, year)
@@ -136,62 +154,78 @@ def sort_files(options):
                             address = get_location(tags)
                             if address:
                                 country = address.get('country', 'Unknown_Country')
-                                city = address.get('city', 'Unknown_City')
+                                # Fallback chain: city → town → village → Unknown_City
+                                city = address.get('city') or address.get('town') or address.get('village', 'Unknown_City')
                                 target_subfolder = os.path.join(target_subfolder, country, city)
 
                         if sort_options.get('orientation'):
-                            with Image.open(file_path) as img:
-                                width, height = img.size
-                                if width > height:
-                                    orientation = 'Landscape'
-                                else:
-                                    orientation = 'Portrait'
-                                target_subfolder = os.path.join(target_subfolder, orientation)
+                            # Bug 6 fix: targeted try-except so a bad file only skips orientation,
+                            # not the entire file sort
+                            try:
+                                with Image.open(file_path) as img:
+                                    width, height = img.size
+                                    orientation = 'Landscape' if width > height else 'Portrait'
+                                    target_subfolder = os.path.join(target_subfolder, orientation)
+                            except Exception:
+                                pass
 
                         if sort_options.get('livePhotos'):
-                            base, ext = os.path.splitext(filename)
-                            if ext.lower() == '.jpg':
+                            base, ext_lp = os.path.splitext(filename)
+                            if ext_lp.lower() == '.jpg':
                                 mov_file = os.path.join(root, base + '.mov')
                                 if os.path.exists(mov_file):
-                                    live_photo_folder = os.path.join(target_subfolder, 'Live_Photos')
-                                    if not os.path.exists(os.path.join(folder, live_photo_folder)):
-                                        os.makedirs(os.path.join(folder, live_photo_folder))
-                                    
-                                    # Move both files to the new target folder structure
-                                    shutil.move(file_path, os.path.join(folder, live_photo_folder, filename))
-                                    shutil.move(mov_file, os.path.join(folder, live_photo_folder, base + '.mov'))
-                                    writer.writerow([filename, file_path, live_photo_folder, 'Moved'])
-                                    writer.writerow([base + '.mov', mov_file, live_photo_folder, 'Moved'])
+                                    live_photo_folder_abs = os.path.join(folder, target_subfolder, 'Live_Photos')
+                                    if not os.path.exists(live_photo_folder_abs):
+                                        os.makedirs(live_photo_folder_abs)
+
+                                    jpg_dest = os.path.join(live_photo_folder_abs, filename)
+                                    mov_dest = os.path.join(live_photo_folder_abs, base + '.mov')
+
+                                    # Bug 4 fix: respect file_operation (was always shutil.move)
+                                    if file_operation == 'copy':
+                                        shutil.copy2(file_path, jpg_dest)
+                                        shutil.copy2(mov_file, mov_dest)
+                                        op_status = 'Copied'
+                                    else:
+                                        shutil.move(file_path, jpg_dest)
+                                        shutil.move(mov_file, mov_dest)
+                                        op_status = 'Moved'
+
+                                    # Bug 4 fix: log absolute path so undo can find the files
+                                    writer.writerow([filename, file_path, live_photo_folder_abs, op_status, filename])
+                                    writer.writerow([base + '.mov', mov_file, live_photo_folder_abs, op_status, base + '.mov'])
                                     continue
 
                         if target_subfolder:
-                            print(f'Moving {filename} to {target_subfolder}')
-                            # Create the full destination path
                             destination_folder = os.path.join(folder, target_subfolder)
                             if not os.path.exists(destination_folder):
                                 os.makedirs(destination_folder)
 
                             destination_path = os.path.join(destination_folder, filename)
+                            dest_filename = filename  # tracks actual name after any rename
 
                             if os.path.exists(destination_path) and conflict_resolution == 'rename':
-                                base, ext = os.path.splitext(filename)
+                                base, ext_cr = os.path.splitext(filename)
                                 i = 1
-                                while os.path.exists(os.path.join(destination_folder, f'{base}_{i}{ext}')):
+                                while os.path.exists(os.path.join(destination_folder, f'{base}_{i}{ext_cr}')):
                                     i += 1
-                                destination_path = os.path.join(destination_folder, f'{base}_{i}{ext}')
+                                dest_filename = f'{base}_{i}{ext_cr}'
+                                destination_path = os.path.join(destination_folder, dest_filename)
 
                             if file_operation == 'copy':
                                 shutil.copy2(file_path, destination_path)
-                                writer.writerow([filename, file_path, destination_folder, 'Copied'])
+                                # Bug 3 fix: log dest_filename (actual name) not original filename
+                                writer.writerow([filename, file_path, destination_folder, 'Copied', dest_filename])
                             else:
                                 shutil.move(file_path, destination_path)
-                                writer.writerow([filename, file_path, destination_folder, 'Moved'])
+                                writer.writerow([filename, file_path, destination_folder, 'Moved', dest_filename])
 
                     except Exception as e:
-                        writer.writerow([filename, file_path, '', f'Error: {e}'])
+                        writer.writerow([filename, file_path, '', f'Error: {e}', ''])
                         continue
 
     return {"status": "success", "message": "Files sorted successfully.", "logFile": log_file}
+
 
 def undo_sort(log_file):
     if not os.path.exists(log_file):
@@ -200,12 +234,17 @@ def undo_sort(log_file):
     destination_folders = set()
     with open(log_file, 'r') as f:
         reader = csv.reader(f)
-        header = next(reader)  # Skip header
+        next(reader)  # Skip header
 
         for row in reader:
-            original_filename, source_path, destination_folder, status = row
+            if len(row) < 4:
+                continue
+            original_filename, source_path, destination_folder, status = row[:4]
+            # Bug 3 fix: use actual destination filename (col 5) if present, else original name
+            dest_filename = row[4] if len(row) > 4 and row[4] else original_filename
+
             if status in ['Moved', 'Copied']:
-                destination_path = os.path.join(destination_folder, original_filename)
+                destination_path = os.path.join(destination_folder, dest_filename)
                 if os.path.exists(destination_path):
                     shutil.move(destination_path, source_path)
                 destination_folders.add(destination_folder)
@@ -215,6 +254,7 @@ def undo_sort(log_file):
             os.rmdir(folder)
 
     return {"status": "success", "message": "Undo operation completed successfully."}
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:

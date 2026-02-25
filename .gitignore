@@ -24,4 +24,3 @@ PRD.txt
 
 # Unit test files
 frontend/src/App.test.js
-backend/test_main.py
