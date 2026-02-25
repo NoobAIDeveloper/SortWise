@@ -21,6 +21,7 @@ frontend/resources/
 *.log
 PRD.docx
 PRD.txt
+CLAUDE.md
 
 
 # Unit test files
